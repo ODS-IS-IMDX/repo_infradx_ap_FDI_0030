@@ -17,5 +17,6 @@ jobs:
       IAM_ROLE_NAME: infradx-dev-iam-role-oidc                 # IAM Role名を記載
       instance-id: "i-040dcc2eaefbce22a"
       bucket-name: "infradx-dev-s3-bckt-cicd-814396194035"
-      path: "App/functions/"
+      repo_path: "App/functions/"
       repo: "repo_infradx_ap_FDI_0030"
+      instance_path: "/infradx/app/infradx-batch-data/functions"
