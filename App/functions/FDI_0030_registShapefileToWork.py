@@ -236,8 +236,6 @@ def download_shapefile(secret_props, shapefile_name, conn, import_id):
         # S3クライアント作成
         s3 = boto3.client(
             "s3",
-            aws_access_key_id=secret_props.get("aws_access_key_id"),
-            aws_secret_access_key=secret_props.get("aws_secret_access_key"),
             region_name=AWS_REGION,
         )
         # シェープファイルダウンロード
@@ -477,8 +475,6 @@ def move_zip_file(secret_props, shapefile_name):
         # S3クライアント作成
         s3 = boto3.client(
             "s3",
-            aws_access_key_id=secret_props.get("aws_access_key_id"),
-            aws_secret_access_key=secret_props.get("aws_secret_access_key"),
             region_name=AWS_REGION,
         )
         # 取込後シェープファイル格納用ディレクトリパス取得
