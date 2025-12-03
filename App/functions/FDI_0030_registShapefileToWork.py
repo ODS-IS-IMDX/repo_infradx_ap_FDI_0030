@@ -90,6 +90,11 @@ def validate_inputs(params):
         logger.error("BPE0019", "標準仕様3Dシェープファイル名", shapefile_name)
         logger.process_error_end()
 
+    # ファイル名にアンダースコアが7つ含まれているか
+    if shapefile_name.count("_") != 7:
+        logger.error("BPE0019", "標準仕様3Dシェープファイル名", shapefile_name)
+        logger.process_error_end()
+
     # 公益事業者・道路管理者ID：1以上9223372036854775807以下の整数であるか
     if not provider_id.isdigit() or not (1 <= int(provider_id) <= 9223372036854775807):
         logger.error("BPE0019", CODE_LIST["provider_id"], provider_id)
