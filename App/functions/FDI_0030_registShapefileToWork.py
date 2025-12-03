@@ -434,7 +434,7 @@ def create_work_table_and_insert_data(
             "-p",
             secret_props.get("db_port"),
             "-U",
-            secret_props.get("db_user_vector_master"),
+            secret_props.get("db_user"),
             "-d",
             secret_props.get("db_name"),
             "-v",
@@ -444,7 +444,7 @@ def create_work_table_and_insert_data(
         ]
         # 環境変数をセット
         env = os.environ.copy()
-        env["PGPASSWORD"] = secret_props.get("db_pass_vector_master")
+        env["PGPASSWORD"] = secret_props.get("db_pass")
         # コマンド実行
         subprocess.run(cmd, env=env, capture_output=True, check=True)
     # コマンド実行時の例外処理
