@@ -295,9 +295,34 @@ def check_file_structure(unzipped_shapefile_name, conn, import_id, shapefile_nam
     unzipped_shapefile_path = Path(f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}")
     required = [".shp", ".dbf", ".shx", ".prj"]
     missing = []
-    for ext in required:
-        if not any(unzipped_shapefile_path.glob(f"*{ext}")):
-            missing.append(f"*{ext}")
+    # 拡張子を除いたファイル一覧を取得
+    file_names = {file.stem for file in unzipped_shapefile_path.iterdir() if file.is_file()}
+
+    # ファイルが存在しない場合はエラー
+    if len(file_names) == 0:
+        # 取込管理テーブル更新
+        update_import_management(
+            conn,
+            logger,
+            import_id,
+            "91",
+            get_message("BPE0035").format("*.shp, *.dbf, *.shx, *.prj"),
+            None,
+            None,
+            None
+        )
+        # 標準仕様3Dシェープファイル削除
+        os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
+        # 解凍後シェープファイル削除
+        shutil.rmtree(f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}")
+        logger.error("BPE0035", "*.shp, *.dbf, *.shx, *.prj")
+        logger.process_error_end()
+
+    # ファイル名ごとに必要なファイル形式がそろっているか確認
+    for file_name in list(file_names):
+        for ext in required:
+            if not (unzipped_shapefile_path / f"{file_name}{ext}").is_file():
+                missing.append(f"*{ext}")
     if missing:
         # 取込管理テーブル更新
         update_import_management(
@@ -592,7 +617,7 @@ def main():
         )
 
         # 4.シェープファイルダウンロード
-        # download_shapefile(secret_props, shapefile_name, conn, import_id)
+        download_shapefile(secret_props, shapefile_name, conn, import_id)
 
         # 5.zipファイル解凍
         unzip_shapefile(shapefile_name, unzipped_shapefile_name, conn, import_id)
@@ -620,8 +645,8 @@ def main():
         warn = False
 
         # 9.zipファイル移動
-        # if not move_zip_file(secret_props, shapefile_name, import_id):
-        #     warn = True
+        if not move_zip_file(secret_props, shapefile_name, import_id):
+            warn = True
 
         # 10.ファイル削除
         if not delete_local_files(
