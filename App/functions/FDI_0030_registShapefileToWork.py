@@ -105,7 +105,7 @@ def validate_inputs(params):
 
 # 2.設備小項目等取得
 def get_fac_subitem(conn, shapefile_name, provider_id, db_mst_schema):
-    fac_subitem_eng = f"{shapefile_name.split('_')[2]}_{shapefile_name.split('_')[3]}"
+    fac_subitem_eng = f"{shapefile_name.split('_')[4]}_{shapefile_name.split('_')[5]}"
 
     # 2-1. 公益事業者・道路管理者マスタとの整合性チェック
     query = (
@@ -118,8 +118,8 @@ def get_fac_subitem(conn, shapefile_name, provider_id, db_mst_schema):
         logger.process_error_end()
 
     # 2-2. ファイル名との整合性チェック
-    provider_code = shapefile_name.split('_')[4]
-    provider_name = shapefile_name.split('_')[5]
+    provider_code = shapefile_name.split('_')[2]
+    provider_name = shapefile_name.split('_')[3]
     query = (
         f"SELECT provider_id FROM {db_mst_schema}.mst_provider "
         "WHERE provider_code = (%s) AND provider_name = (%s)"
