@@ -645,7 +645,7 @@ def main():
         warn = False
 
         # 9.zipファイル移動
-        if not move_zip_file(secret_props, shapefile_name, import_id):
+        if not move_zip_file(secret_props, shapefile_name):
             warn = True
 
         # 10.ファイル削除
