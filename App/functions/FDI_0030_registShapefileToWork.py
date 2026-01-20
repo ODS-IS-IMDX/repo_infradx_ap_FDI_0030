@@ -21,12 +21,15 @@ import os
 import shutil
 import subprocess
 import traceback
+import json
 from datetime import datetime
 from pathlib import Path
+from pyproj import CRS
 
 import boto3
 
 from core.config_reader import read_config
+from core.constants import Constants
 from core.database import Database
 from core.logger import LogManager
 from core.message import get_message
@@ -40,7 +43,11 @@ config = read_config(logger)
 
 AWS_REGION = config["aws"]["region"].strip()
 SHAPEFILE_DIR_PATH = config["folderPass"]["shapefile_dir_path"].strip()
-PRE_IMPORT_SHAPEFILE_DIR_PATH = config["aws"]["pre_import_shapefile_dir_path"].strip()
+PRE_IMPORT_SHAPEFILE_DIR_PATH = (
+    config["aws"]["pre_import_shapefile_dir_path"].strip()
+)
+ENC_CP932 = Constants.CHARACTER_ENCODING_CP932
+ENC_UTF8 = Constants.CHARACTER_ENCODING_UTF_8
 
 CODE_LIST = {
     "shapefile_name": "標準仕様3Dシェープファイル名",
@@ -52,7 +59,9 @@ CODE_LIST = {
 def parse_args():
     try:
         # 完全一致のみ許可
-        parser = argparse.ArgumentParser(allow_abbrev=False, exit_on_error=False)
+        parser = argparse.ArgumentParser(
+            allow_abbrev=False, exit_on_error=False
+        )
         parser.add_argument("--shapefile_name", required=False)
         parser.add_argument("--provider_id", required=False)
         return parser.parse_args()
@@ -85,18 +94,16 @@ def validate_inputs(params):
         logger.error("BPE0019", "標準仕様3Dシェープファイル名", shapefile_name)
         logger.process_error_end()
 
-    # ファイル名の先頭が「shape_3d_」であるか
-    if not shapefile_name.startswith("shape_3d_"):
-        logger.error("BPE0019", "標準仕様3Dシェープファイル名", shapefile_name)
-        logger.process_error_end()
-
-    # ファイル名にアンダースコアが7つ含まれているか
-    if shapefile_name.count("_") != 7:
+    # ファイル名にアンダースコアが4つ含まれているか
+    if shapefile_name.count("_") != 4:
         logger.error("BPE0019", "標準仕様3Dシェープファイル名", shapefile_name)
         logger.process_error_end()
 
     # 公益事業者・道路管理者ID：1以上9223372036854775807以下の整数であるか
-    if not provider_id.isdigit() or not (1 <= int(provider_id) <= 9223372036854775807):
+    if (
+        not provider_id.isdigit()
+        or not (1 <= int(provider_id) <= 9223372036854775807)
+    ):
         logger.error("BPE0019", CODE_LIST["provider_id"], provider_id)
         logger.process_error_end()
 
@@ -105,26 +112,32 @@ def validate_inputs(params):
 
 # 2.設備小項目等取得
 def get_fac_subitem(conn, shapefile_name, provider_id, db_mst_schema):
-    fac_subitem_eng = f"{shapefile_name.split('_')[4]}_{shapefile_name.split('_')[5]}"
+    fac_subitem_eng = (
+        f"{shapefile_name.split('_')[2]}_{shapefile_name.split('_')[3]}"
+    )
 
     # 2-1. 公益事業者・道路管理者マスタとの整合性チェック
     query = (
         f"SELECT EXISTS (SELECT 1 FROM {db_mst_schema}.mst_provider "
         "WHERE provider_id = (%s))"
     )
-    result = Database.execute_query(conn, logger, query, (provider_id,), fetchone=True)
+    result = Database.execute_query(
+        conn, logger, query, (provider_id,), fetchone=True
+    )
     if not result:
         logger.error("BPE0003", "公益事業者・道路管理者ID", provider_id)
         logger.process_error_end()
 
     # 2-2. ファイル名との整合性チェック
-    provider_code = shapefile_name.split('_')[2]
-    provider_name = shapefile_name.split('_')[3]
+    provider_code = shapefile_name.split('_')[0]
+    provider_name = shapefile_name.split('_')[1]
     query = (
         f"SELECT provider_id FROM {db_mst_schema}.mst_provider "
         "WHERE provider_code = (%s) AND provider_name = (%s)"
     )
-    result = Database.execute_query(conn, logger, query, (provider_code, provider_name), fetchone=True)
+    result = Database.execute_query(
+        conn, logger, query, (provider_code, provider_name), fetchone=True
+    )
     if str(result) != provider_id:
         logger.error("BPE0052", shapefile_name, provider_id)
         logger.process_error_end()
@@ -181,8 +194,10 @@ def insert_mst_import_management(
                 created_by,
                 created_at)
             VALUES(
-                (SELECT provider_code FROM {db_mst_schema}.mst_provider WHERE provider_id = %s),
-                (SELECT fac_subitem_id FROM {db_mst_schema}.mst_fac_subitem WHERE fac_subitem_eng = %s),
+                (SELECT provider_code FROM {db_mst_schema}.mst_provider
+                    WHERE provider_id = %s),
+                (SELECT fac_subitem_id FROM {db_mst_schema}.mst_fac_subitem
+                    WHERE fac_subitem_eng = %s),
                 '10',
                 %s,
                 %s,
@@ -210,10 +225,14 @@ def insert_mst_import_management(
         query2 = f"""
             SELECT import_id FROM {db_mst_schema}.mst_import_management
             WHERE provider_code = (
-                SELECT provider_code FROM {db_mst_schema}.mst_provider WHERE provider_id = %s
+                SELECT provider_code
+                FROM {db_mst_schema}.mst_provider
+                WHERE provider_id = %s
             )
             AND fac_subitem_id = (
-                SELECT fac_subitem_id FROM {db_mst_schema}.mst_fac_subitem WHERE fac_subitem_eng = %s
+                SELECT fac_subitem_id
+                FROM {db_mst_schema}.mst_fac_subitem
+                WHERE fac_subitem_eng = %s
             )
             ORDER BY created_at DESC
             LIMIT 1
@@ -291,12 +310,20 @@ def unzip_shapefile(shapefile_name, unzipped_shapefile_name, conn, import_id):
 
 
 # 6.構成ファイルチェック
-def check_file_structure(unzipped_shapefile_name, conn, import_id, shapefile_name):
-    unzipped_shapefile_path = Path(f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}")
+def check_file_structure(
+    unzipped_shapefile_name, conn, import_id, shapefile_name
+):
+    unzipped_shapefile_path = Path(
+        f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}"
+    )
     required = [".shp", ".dbf", ".shx", ".prj"]
     missing = []
     # 拡張子を除いたファイル一覧を取得
-    file_names = {file.stem for file in unzipped_shapefile_path.iterdir() if file.is_file()}
+    file_names = {
+        file.stem
+        for file in unzipped_shapefile_path.iterdir()
+        if file.is_file()
+    }
 
     # ファイルが存在しない場合はエラー
     if len(file_names) == 0:
@@ -314,7 +341,9 @@ def check_file_structure(unzipped_shapefile_name, conn, import_id, shapefile_nam
         # 標準仕様3Dシェープファイル削除
         os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
         # 解凍後シェープファイル削除
-        shutil.rmtree(f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}")
+        shutil.rmtree(
+            f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}"
+        )
         logger.error("BPE0035", "*.shp, *.dbf, *.shx, *.prj")
         logger.process_error_end()
 
@@ -354,95 +383,183 @@ def create_ddl_dml(
     import_id,
     shapefile_name,
 ):
-    try:
-        # 7-1.DDL書き込み
-        sql_dir_path = config["folderPass"]["sql_dir_path"].strip()
-        db_work_schema = secret_props.get("db_work_schema")
-        sql_file_path = f"{sql_dir_path}/{fac_subitem_eng}_{provider_id}.sql"
-        # 解凍後シェープファイルの.shpファイル一覧を取得
-        unzipped_shapefile_path = f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}"
-        file_list_all = os.listdir(unzipped_shapefile_path)
-        file_list = [
-            f"{unzipped_shapefile_path}/{file}"
-            for file in file_list_all
-            if file.endswith(".shp")
-        ]
+    # 7-1.DDL書き込み
+    sql_dir_path = config["folderPass"]["sql_dir_path"].strip()
+    db_work_schema = secret_props.get("db_work_schema")
+    sql_file_path = f"{sql_dir_path}/{fac_subitem_eng}_{provider_id}.sql"
+    # 解凍後シェープファイルの.shpファイル一覧を取得
+    unzipped_shapefile_path = (
+        f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}"
+    )
+    shapefile_list_all = os.listdir(unzipped_shapefile_path)
+    shapefile_list = [
+        f"{unzipped_shapefile_path}/{file}"
+        for file in shapefile_list_all
+        if file.endswith(".shp")
+    ]
+    cmd = [
+        "shp2pgsql",
+        "-p",
+        "-W",
+        ENC_CP932,
+        "-I",
+        shapefile_list[0],
+        f"{db_work_schema}.{work_table_name}",
+    ]
+    with open(sql_file_path, "w", encoding=ENC_UTF8) as f:
+        try:
+            # コマンド実行
+            subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, check=True)
+        except Exception as e:
+            # 取込管理テーブル更新
+            update_import_management(
+                conn,
+                logger,
+                import_id,
+                "91",
+                get_message("BPE0049").format(
+                    shapefile_list[0].split('/')[-1],
+                    ""
+                ).replace("[]", ""),
+                None,
+                None,
+                None
+            )
+            # 標準仕様3Dシェープファイル削除
+            os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
+            # 解凍後シェープファイル削除
+            shutil.rmtree(f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}")
+            # SQLファイル削除
+            os.remove(sql_file_path)
+            logger.error(
+                "BPE0049",
+                shapefile_list[0].split('/')[-1],
+                e.stderr.decode().strip()
+            )
+            logger.process_error_end()
+    geometry_type_list = json.loads(secret_props.get("geometry_type_list"))
+    geometry_type = geometry_type_list.get(fac_subitem_eng)
+    with open(sql_file_path, "r", encoding=ENC_UTF8) as f:
+        content = f.read()
+        # gidカラムと主キー設定を削除
+        content = content.replace("gid serial,", "")
+        content = content.replace(
+            (
+                f'ALTER TABLE "{db_work_schema}"."{work_table_name}" '
+                "ADD PRIMARY KEY (gid);"
+            ),
+            "",
+        )
+        content += f"""
+            ALTER TABLE "{db_work_schema}"."{work_table_name}"
+            ALTER COLUMN geom TYPE geometry({geometry_type}M, 0)
+            USING geom::geometry({geometry_type}M, 0);
+        """
+    with open(sql_file_path, "w", encoding=ENC_UTF8) as f:
+        f.write(content)
+
+    # 7-2.DML書き込み
+    # シークレット設定値(バッチ)から[座標系一覧]を取得し配列に格納する
+    epsg_list = secret_props.get("epsg_list").split(",")
+    for shapefile in shapefile_list:
+        prjfile = shapefile.replace(".shp", ".prj")
+        with open(prjfile, 'r', encoding=ENC_CP932) as f:
+            prj_txt = f.read()
+        crs = CRS.from_wkt(prj_txt)
+        epsg = str(crs.to_epsg())
+        if epsg not in epsg_list:
+            # 取込管理テーブル更新
+            update_import_management(
+                conn,
+                logger,
+                import_id,
+                "91",
+                get_message("BPE0074").format(shapefile.split('/')[-1], epsg),
+                None,
+                None,
+                None
+            )
+            # 標準仕様3Dシェープファイル削除
+            os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
+            # 解凍後シェープファイル削除
+            shutil.rmtree(
+                f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}"
+            )
+            # SQLファイル削除
+            os.remove(sql_file_path)
+            logger.error("BPE0074", shapefile.split('/')[-1], epsg)
+            logger.process_error_end()
+
         cmd = [
             "shp2pgsql",
-            "-p",
+            "-a",
+            "-D",
             "-W",
-            "UTF-8",
+            ENC_CP932,
             "-s",
-            "4326",
-            "-I",
-            file_list[0],
+            epsg,
+            shapefile,
             f"{db_work_schema}.{work_table_name}",
         ]
-        with open(sql_file_path, "w", encoding="utf-8") as f:
-            # コマンド実行
-            subprocess.run(cmd, stdout=f, check=True)
-
-        with open(sql_file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-            # gidカラムと主キー設定を削除
-            content = content.replace("gid serial,", "")
-            content = content.replace(
-                (
-                    f'ALTER TABLE "{db_work_schema}"."{work_table_name}" '
-                    "ADD PRIMARY KEY (gid);"
-                ),
-                "",
-            )
-        with open(sql_file_path, "w", encoding="utf-8") as f:
-            f.write(content)
-
-        # 7-2.DML書き込み
-        for file in file_list:
-            cmd = [
-                "shp2pgsql",
-                "-a",
-                "-D",
-                "-W",
-                "UTF-8",
-                "-s",
-                "4326",
-                file,
-                f"{db_work_schema}.{work_table_name}",
-            ]
-            with open(sql_file_path, "a", encoding="utf-8") as f:
+        with open(sql_file_path, "a", encoding=ENC_UTF8) as f:
+            try:
                 # コマンド実行
-                subprocess.run(cmd, stdout=f, check=True)
-        with open(sql_file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-            # BEGIN;、COMMIT;を削除
-            content = content.replace("BEGIN;", "")
-            content = content.replace("COMMIT;", "")
-        # BEGIN;、COMMIT;を追加
-        new_content = "BEGIN;\n" + content + "\nCOMMIT;\n"
-        with open(sql_file_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
+                subprocess.run(
+                    cmd, stdout=f, stderr=subprocess.PIPE, check=True
+                )
+            except Exception as e:
+                # 取込管理テーブル更新
+                update_import_management(
+                    conn,
+                    logger,
+                    import_id,
+                    "91",
+                    get_message("BPE0075").format(
+                        shapefile.split('/')[-1],
+                        ""
+                    ).replace("[]", ""),
+                    None,
+                    None,
+                    None
+                )
+                # 標準仕様3Dシェープファイル削除
+                os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
+                # 解凍後シェープファイル削除
+                shutil.rmtree(
+                    f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}"
+                )
+                # SQLファイル削除
+                os.remove(sql_file_path)
+                logger.error(
+                    "BPE0075",
+                    shapefile.split('/')[-1],
+                    e.stderr.decode().strip()
+                )
+                logger.process_error_end()
+    with open(sql_file_path, "r", encoding=ENC_UTF8) as f:
+        content = f.read()
+    # 追記クエリ作成
+    add_text = f"""
+        ALTER TABLE {db_work_schema}.{work_table_name}
+            RENAME COLUMN geom TO geom_ori;
+        ALTER INDEX  {db_work_schema}.{work_table_name}_geom_idx
+            RENAME TO {work_table_name}_geom_ori_idx;
+        ALTER TABLE {db_work_schema}.{work_table_name}
+            ADD COLUMN geom geometry({geometry_type}, 4326);
+        CREATE INDEX ON {db_work_schema}.{work_table_name}
+            USING GIST (geom);
+        UPDATE {db_work_schema}.{work_table_name}
+            SET geom = ST_Transform(ST_Force3D(geom_ori), 4326);
+    """
+    # BEGIN;、COMMIT;を削除
+    content = content.replace("BEGIN;", "")
+    content = content.replace("COMMIT;", "")
+    # 追記クエリ、BEGIN;、COMMIT;を追加
+    new_content = "BEGIN;\n" + content + add_text + "\nCOMMIT;\n"
+    with open(sql_file_path, "w", encoding=ENC_UTF8) as f:
+        f.write(new_content)
 
-        return sql_file_path
-    except Exception:
-        # 取込管理テーブル更新
-        update_import_management(
-            conn,
-            logger,
-            import_id,
-            "91",
-            get_message("BPE0049").format(unzipped_shapefile_name),
-            None,
-            None,
-            None
-        )
-        # 標準仕様3Dシェープファイル削除
-        os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
-        # 解凍後シェープファイル削除
-        shutil.rmtree(f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}")
-        # SQLファイル削除
-        os.remove(sql_file_path)
-        logger.error("BPE0049", unzipped_shapefile_name)
-        logger.process_error_end()
+    return sql_file_path
 
 
 # 8.一時テーブル作成・データ登録
@@ -485,7 +602,10 @@ def create_work_table_and_insert_data(
             logger,
             import_id,
             "91",
-            get_message("BPE0050").format(work_table_name, ""),
+            get_message("BPE0050").format(
+                work_table_name,
+                ""
+            ).replace("[]", ""),
             None,
             None,
             None
@@ -494,7 +614,11 @@ def create_work_table_and_insert_data(
         os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
         # 解凍後シェープファイル削除
         shutil.rmtree(f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}")
-        logger.error("BPE0050", work_table_name, e.stderr.decode().strip())
+        logger.error(
+            "BPE0050",
+            work_table_name,
+            e.stderr.decode().strip()
+        )
         logger.process_error_end()
 
 
@@ -591,7 +715,7 @@ def main():
         secret_name = config["aws"]["secret_name"]
         secret_props = SecretPropertiesSingleton(secret_name, config, logger)
 
-        #シークレットからマスタ管理スキーマ名を取得
+        # シークレットからマスタ管理スキーマ名を取得
         db_mst_schema = secret_props.get("db_mst_schema")
 
         # DB接続を取得
@@ -620,10 +744,14 @@ def main():
         download_shapefile(secret_props, shapefile_name, conn, import_id)
 
         # 5.zipファイル解凍
-        unzip_shapefile(shapefile_name, unzipped_shapefile_name, conn, import_id)
+        unzip_shapefile(
+            shapefile_name, unzipped_shapefile_name, conn, import_id
+        )
 
         # 6.構成ファイルチェック
-        check_file_structure(unzipped_shapefile_name, conn, import_id, shapefile_name)
+        check_file_structure(
+            unzipped_shapefile_name, conn, import_id, shapefile_name
+        )
 
         # 7.DDL・DML作成
         sql_file_path = create_ddl_dml(
@@ -639,7 +767,13 @@ def main():
 
         # 8.一時テーブル作成・データ登録
         create_work_table_and_insert_data(
-            secret_props, sql_file_path, work_table_name, conn, import_id, shapefile_name, unzipped_shapefile_name
+            secret_props,
+            sql_file_path,
+            work_table_name,
+            conn,
+            import_id,
+            shapefile_name,
+            unzipped_shapefile_name
         )
 
         warn = False
@@ -653,7 +787,7 @@ def main():
             shapefile_name, unzipped_shapefile_name, sql_file_path
         ):
             warn = True
-        
+
         # 11.取込管理テーブル更新
         update_import_management(
             conn,
@@ -688,7 +822,10 @@ def main():
                 None
             )
         # 標準仕様3Dシェープファイル削除
-        if shapefile_name and os.path.exists(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}"):
+        if (
+            shapefile_name
+            and os.path.exists(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
+        ):
             os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
         # 解凍後シェープファイル削除
         if unzipped_shapefile_name and os.path.exists(
