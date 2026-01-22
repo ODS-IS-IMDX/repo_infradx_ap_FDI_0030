@@ -307,6 +307,24 @@ def unzip_shapefile(shapefile_name, unzipped_shapefile_name, conn, import_id):
         os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
         logger.error("BPE0012", "標準仕様3Dシェープファイル名", shapefile_name)
         logger.process_error_end()
+    if not os.path.exists(
+        f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}"
+    ):
+        # 取込管理テーブル更新
+        update_import_management(
+            conn,
+            logger,
+            import_id,
+            "91",
+            get_message("BPE0035").format("*.shp, *.dbf, *.shx, *.prj"),
+            None,
+            None,
+            None
+        )
+        # 標準仕様3Dシェープファイル削除
+        os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
+        logger.error("BPE0035", "*.shp, *.dbf, *.shx, *.prj")
+        logger.process_error_end()
 
 
 # 6.構成ファイルチェック
@@ -324,28 +342,6 @@ def check_file_structure(
         for file in unzipped_shapefile_path.iterdir()
         if file.is_file()
     }
-
-    # ファイルが存在しない場合はエラー
-    if len(file_names) == 0:
-        # 取込管理テーブル更新
-        update_import_management(
-            conn,
-            logger,
-            import_id,
-            "91",
-            get_message("BPE0035").format("*.shp, *.dbf, *.shx, *.prj"),
-            None,
-            None,
-            None
-        )
-        # 標準仕様3Dシェープファイル削除
-        os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
-        # 解凍後シェープファイル削除
-        shutil.rmtree(
-            f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}"
-        )
-        logger.error("BPE0035", "*.shp, *.dbf, *.shx, *.prj")
-        logger.process_error_end()
 
     # ファイル名ごとに必要なファイル形式がそろっているか確認
     for file_name in list(file_names):
@@ -429,8 +425,6 @@ def create_ddl_dml(
             os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
             # 解凍後シェープファイル削除
             shutil.rmtree(f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}")
-            # SQLファイル削除
-            os.remove(sql_file_path)
             logger.error(
                 "BPE0049",
                 shapefile_list[0].split('/')[-1],
