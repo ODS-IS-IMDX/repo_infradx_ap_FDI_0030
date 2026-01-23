@@ -495,41 +495,41 @@ def create_ddl_dml(
             shapefile,
             f"{db_work_schema}.{work_table_name}",
         ]
-        with open(sql_file_path, "a", encoding=ENC_UTF8) as f:
-            try:
+        try:
+            with open(sql_file_path, "a", encoding=ENC_UTF8) as f:
                 # コマンド実行
                 subprocess.run(
                     cmd, stdout=f, stderr=subprocess.PIPE, check=True
                 )
-            except Exception as e:
-                # 取込管理テーブル更新
-                update_import_management(
-                    conn,
-                    logger,
-                    import_id,
-                    "91",
-                    get_message("BPE0075").format(
-                        shapefile.split('/')[-1],
-                        ""
-                    ).replace("[]", ""),
-                    None,
-                    None,
-                    None
-                )
-                # 標準仕様3Dシェープファイル削除
-                os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
-                # 解凍後シェープファイル削除
-                shutil.rmtree(
-                    f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}"
-                )
-                # SQLファイル削除
-                os.remove(sql_file_path)
-                logger.error(
-                    "BPE0075",
+        except Exception as e:
+            # 取込管理テーブル更新
+            update_import_management(
+                conn,
+                logger,
+                import_id,
+                "91",
+                get_message("BPE0075").format(
                     shapefile.split('/')[-1],
-                    e.stderr.decode().strip()
-                )
-                logger.process_error_end()
+                    ""
+                ).replace("[]", ""),
+                None,
+                None,
+                None
+            )
+            # 標準仕様3Dシェープファイル削除
+            os.remove(f"{SHAPEFILE_DIR_PATH}/{shapefile_name}")
+            # 解凍後シェープファイル削除
+            shutil.rmtree(
+                f"{SHAPEFILE_DIR_PATH}/{unzipped_shapefile_name}"
+            )
+            # SQLファイル削除
+            os.remove(sql_file_path)
+            logger.error(
+                "BPE0075",
+                shapefile.split('/')[-1],
+                e.stderr.decode().strip()
+            )
+            logger.process_error_end()
     with open(sql_file_path, "r", encoding=ENC_UTF8) as f:
         content = f.read()
     # 追記クエリ作成
